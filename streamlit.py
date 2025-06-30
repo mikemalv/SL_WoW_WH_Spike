@@ -331,12 +331,34 @@ with tab1:
         else:
             st.info(f"No spikes found above {spike_threshold}% threshold")
         
-        # Heatmap section moved here
-        st.subheader("Week-over-Week Change Heatmap")
+# Heatmap section moved here
+        st.subheader("Week-over-Week Change Visualization")
+        
+        # Heatmap options
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+        with col1:
+            include_cloud_services = st.checkbox("Include cloud services?", value=False)
+        with col2:
+            # Threshold for highlighting significant changes
+            highlight_threshold = st.number_input("Highlight changes above %", value=20, min_value=0, max_value=100, step=5)
+        with col3:
+            # Visualization style
+            viz_style = st.selectbox("Visualization style", ["Heatmap", "Diverging Bars"], index=0)
         
         try:
-            # Create a clean dataframe for the heatmap
-            heatmap_df = df[['warehouse_name', 'week_start', 'credit_change_pct']].copy()
+            # Filter data based on cloud services option
+            if include_cloud_services and 'cloud_credits' in df.columns:
+                # Use total credits (includes cloud services)
+                heatmap_df = df[['warehouse_name', 'week_start', 'credit_change_pct']].copy()
+            else:
+                # Recalculate percentage change for compute credits only
+                df_compute = df.copy()
+                df_compute = df_compute.sort_values(['warehouse_name', 'week_start'])
+                df_compute['prev_compute'] = df_compute.groupby('warehouse_name')['compute_credits'].shift(1)
+                df_compute['compute_change_pct'] = ((df_compute['compute_credits'] - df_compute['prev_compute']) / df_compute['prev_compute'] * 100).round(1)
+                df_compute['compute_change_pct'] = df_compute['compute_change_pct'].fillna(0)
+                heatmap_df = df_compute[['warehouse_name', 'week_start', 'compute_change_pct']].copy()
+                heatmap_df.rename(columns={'compute_change_pct': 'credit_change_pct'}, inplace=True)
             
             # Convert week_start to string to avoid datetime issues
             heatmap_df['week_start'] = heatmap_df['week_start'].astype(str).str[:10]
@@ -352,33 +374,162 @@ with tab1:
             ).fillna(0)
             
             if len(heatmap_data) > 0 and len(heatmap_data.columns) > 0:
-                # Create heatmap
-                fig_heatmap = go.Figure(data=go.Heatmap(
-                    z=heatmap_data.values,
-                    x=heatmap_data.columns.tolist(),
-                    y=heatmap_data.index.tolist(),
-                    colorscale='RdYlBu_r',
-                    zmid=0,
-                    text=heatmap_data.values.round(1),
-                    texttemplate='%{text}%',
-                    textfont={"size": 10},
-                    colorbar=dict(title="% Change")
-                ))
+                if viz_style == "Heatmap":
+                    # Create custom colorscale with white at 0
+                    colorscale = [
+                        [0.0, '#4575b4'],      # Dark blue for large decreases
+                        [0.2, '#91bfdb'],      # Medium blue
+                        [0.4, '#e0f3f8'],      # Light blue
+                        [0.5, '#ffffff'],      # White at 0
+                        [0.6, '#fee090'],      # Yellow-orange
+                        [0.8, '#fc8d59'],      # Light red
+                        [1.0, '#d73027']       # Dark red for large increases
+                    ]
+                    
+                    # Determine color scale range
+                    max_abs_value = max(abs(heatmap_data.values.min()), abs(heatmap_data.values.max()))
+                    if max_abs_value == 0:
+                        max_abs_value = 1  # Avoid division by zero
+                    
+                    # Create text annotations with conditional formatting
+                    text_values = heatmap_data.values.round(1)
+                    text_annotations = []
+                    for i in range(len(text_values)):
+                        row_texts = []
+                        for j in range(len(text_values[i])):
+                            val = text_values[i][j]
+                            if abs(val) >= highlight_threshold:
+                                # Bold text for significant changes
+                                row_texts.append(f"<b>{val}%</b>")
+                            elif val == 0:
+                                row_texts.append("-")
+                            else:
+                                row_texts.append(f"{val}%")
+                        text_annotations.append(row_texts)
+                    
+                    # Create heatmap
+                    fig_heatmap = go.Figure(data=go.Heatmap(
+                        z=heatmap_data.values,
+                        x=heatmap_data.columns.tolist(),
+                        y=heatmap_data.index.tolist(),
+                        colorscale=colorscale,
+                        zmid=0,
+                        zmin=-max_abs_value,
+                        zmax=max_abs_value,
+                        text=text_annotations,
+                        texttemplate='%{text}',
+                        textfont={"size": 12, "color": "black"},  # Force black text
+                        hovertemplate='<b>%{y}</b><br>Week: %{x}<br>Change: %{z:.1f}%<extra></extra>',
+                        colorbar=dict(
+                            title="% Change",
+                            title_font=dict(color='black', size=12),  # Black colorbar title
+                            tickfont=dict(color='black', size=10),    # Black colorbar tick labels
+                            tickmode='array',
+                            tickvals=[-max_abs_value, -max_abs_value/2, 0, max_abs_value/2, max_abs_value],
+                            ticktext=[f'{-max_abs_value:.0f}%', f'{-max_abs_value/2:.0f}%', '0%', f'{max_abs_value/2:.0f}%', f'{max_abs_value:.0f}%']
+                        ),
+                        xgap=3,  # Gap between cells
+                        ygap=3   # Gap between cells
+                    ))
+                    
+                    # Remove grid lines and set clean appearance
+                    fig_heatmap.update_xaxes(
+                        showgrid=False,
+                        tickangle=-45,
+                        side='bottom',
+                        tickfont=dict(color='black', size=11)  # Black axis labels
+                    )
+                    fig_heatmap.update_yaxes(
+                        showgrid=False,
+                        tickfont=dict(color='black', size=11)  # Black axis labels
+                    )
+                    
+                    fig_heatmap.update_layout(
+                        title={
+                            'text': f"Week-over-Week {'Compute ' if not include_cloud_services else ''}Credit Usage Change (%)",
+                            'font': {'size': 16, 'color': 'black'}
+                        },
+                        xaxis_title="Week Starting",
+                        yaxis_title="Warehouse",
+                        xaxis=dict(title_font=dict(color='black', size=12)),
+                        yaxis=dict(title_font=dict(color='black', size=12)),
+                        height=max(400, len(heatmap_data.index) * 30),
+                        plot_bgcolor='rgba(0,0,0,0)',  # Transparent background
+                        paper_bgcolor='white',
+                        margin=dict(l=150)  # More space for warehouse names
+                    )
+                    
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
+                    
+                else:  # Diverging Bars visualization
+                    # Get the most recent week's data for diverging bars
+                    latest_week = heatmap_data.columns[-1]
+                    latest_data = heatmap_data[latest_week].sort_values(ascending=True)
+                    
+                    # Create color array based on values
+                    colors = ['#4575b4' if x < -highlight_threshold else 
+                             '#d73027' if x > highlight_threshold else 
+                             '#999999' for x in latest_data.values]
+                    
+                    # Create diverging bar chart
+                    fig_bars = go.Figure(data=[
+                        go.Bar(
+                            x=latest_data.values,
+                            y=latest_data.index,
+                            orientation='h',
+                            marker=dict(
+                                color=colors,
+                                line=dict(color='rgba(0,0,0,0.3)', width=1)
+                            ),
+                            text=[f"{v:.1f}%" for v in latest_data.values],
+                            textposition='outside',
+                            textfont=dict(color='black', size=11),  # Black text on bars
+                            hovertemplate='<b>%{y}</b><br>Change: %{x:.1f}%<extra></extra>'
+                        )
+                    ])
+                    
+                    # Add vertical line at zero
+                    fig_bars.add_shape(
+                        type="line",
+                        x0=0, y0=-0.5, x1=0, y1=len(latest_data)-0.5,
+                        line=dict(color="black", width=1)
+                    )
+                    
+                    fig_bars.update_layout(
+                        title={
+                            'text': f"Week-over-Week {'Compute ' if not include_cloud_services else ''}Credit Change (%) - {latest_week}",
+                            'font': {'size': 16, 'color': 'black'}
+                        },
+                        xaxis_title="Percentage Change",
+                        yaxis_title="Warehouse",
+                        xaxis=dict(
+                            title_font=dict(color='black', size=12),
+                            tickfont=dict(color='black', size=11),
+                            zeroline=True,
+                            zerolinecolor='black',
+                            zerolinewidth=1,
+                            gridcolor='rgba(0,0,0,0.1)'
+                        ),
+                        yaxis=dict(
+                            title_font=dict(color='black', size=12),
+                            tickfont=dict(color='black', size=11)
+                        ),
+                        height=max(400, len(latest_data) * 30),
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='white',
+                        showlegend=False
+                    )
+                    
+                    st.plotly_chart(fig_bars, use_container_width=True)
                 
-                fig_heatmap.update_layout(
-                    title="Week-over-Week Credit Usage Change (%)",
-                    xaxis_title="Week Starting",
-                    yaxis_title="Warehouse",
-                    height=max(400, len(heatmap_data.index) * 25)
-                )
-                
-                st.plotly_chart(fig_heatmap, use_container_width=True)
+                # Add legend
+                st.caption(f"**Legend:** Red = Increases (higher costs), Blue = Decreases (cost savings). Values above ±{highlight_threshold}% are highlighted. " + 
+                          ("Showing compute credits only." if not include_cloud_services else "Showing total credits (compute + cloud services).") +
+                          (" Zero values shown as '-'." if viz_style == "Heatmap" else ""))
             else:
                 st.info("Not enough data to generate heatmap. Need at least 2 weeks of data.")
         except Exception as e:
             st.info(f"Unable to generate heatmap: {str(e)}")
-    else:
-        st.info("No warehouse usage data available for spike detection.")
 
 # TAB 2: TRENDS (previously tab2)
 with tab2:
