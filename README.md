@@ -4,7 +4,7 @@
 
 A Streamlit-based dashboard for monitoring Snowflake warehouse credit consumption, identifying usage spikes, and analyzing week-over-week trends.
 
-<img width="1415" alt="image" src="https://github.com/user-attachments/assets/cfad637d-a77c-4748-bd81-2042991cc279" />
+![image](https://github.com/user-attachments/assets/6d3bfc74-6d84-4c03-90b4-bc771eca89bb)
 
 
 ## 🚀 Features
